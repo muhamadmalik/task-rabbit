@@ -1,0 +1,205 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SERVICE_SEEKER
+  SERVICE_PROVIDER
+  ADMIN
+}
+
+enum ServicePriceModel {
+  FIXED
+  HOURLY
+  PER_UNIT 
+}
+
+enum ServiceLocationType {
+  CLIENT_LOCATION
+  PROVIDER_LOCATION
+  REMOTE
+}
+
+enum ServiceStatus {
+  ACTIVE
+  PAUSED
+  PENDING_APPROVAL 
+  REJECTED
+}
+
+enum BookingStatus {
+  PENDING_CONFIRMATION 
+  CONFIRMED
+  COMPLETED
+  CANCELLED_BY_SEEKER
+  CANCELLED_BY_PROVIDER
+  REJECTED_BY_PROVIDER 
+}
+
+enum ReviewStatus {
+  PENDING_APPROVAL 
+  APPROVED
+  REJECTED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESSFUL
+  FAILED
+  REFUNDED
+}
+
+model User {
+  id                  Int      @id @default(autoincrement())
+  email               String   @unique
+  name                String
+  password            String
+  role                Role
+  phoneNumber         String?
+  profilePictureUrl   String?
+  address             String?
+  bio                 String?
+  isVerified          Boolean  @default(false) 
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  servicesProvided    Service[] @relation("ProviderServices") 
+  bookingsAsSeeker    Booking[] @relation("SeekerBookings")
+  bookingsAsProvider  Booking[] @relation("ProviderBookings")
+  reviewsGiven        Review[]  @relation("SeekerReviews")
+  reviewsReceived     Review[]  @relation("ProviderReviews")
+  paymentsAsSeeker    Payment[] @relation("SeekerPayments")
+  paymentsToProvider  Payment[] @relation("ProviderPayments")
+  providerAvailability ProviderAvailability[]
+
+  @@map("users") 
+}
+
+model ProviderAvailability {
+  id                  Int      @id @default(autoincrement())
+  provider            User     @relation(fields: [providerId], references: [id])
+  providerId          Int
+  dayOfWeek           Int 
+  startTime           String 
+  endTime             String 
+  isSpecificDate      Boolean  @default(false) // If true, dayOfWeek might be ignored and date field used
+  specificDate        DateTime? // For one-off availability/unavailability
+  isUnavailable       Boolean  @default(false) // Marks a slot as unavailable
+
+  @@map("provider_availabilities")
+}
+
+
+model Category {
+  id              Int      @id @default(autoincrement())
+  name            String   @unique
+  description     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  services        Service[]
+  parentCategory  Category? @relation("SubCategories", fields: [parentCategoryId], references: [id])
+  parentCategoryId Int?
+  subCategories   Category[] @relation("SubCategories")
+
+
+  @@map("categories")
+}
+
+model Service {
+  id                      Int                 @id @default(autoincrement())
+  title                   String
+  description             String
+  price                   Float
+  priceModel              ServicePriceModel
+  locationType            ServiceLocationType
+  serviceArea             String?
+  imagesUrls              Json? // Store as an array of strings: ['url1', 'url2']
+  estimatedDurationMinutes Int?
+  status                  ServiceStatus       @default(PENDING_APPROVAL)
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
+
+  provider                User                @relation("ProviderServices", fields: [providerId], references: [id])
+  providerId              Int
+  category                Category            @relation(fields: [categoryId], references: [id])
+  categoryId              Int
+  bookings                Booking[]
+  reviews                 Review[]            @relation("ServiceReviews")
+
+
+  @@map("services")
+}
+
+model Booking {
+  id                      Int           @id @default(autoincrement())
+  bookingDate             DateTime // Scheduled date and time for the service
+  durationMinutes         Int?
+  address                 String? // Address where the service will be performed (if applicable)
+  notes                   String? // Special instructions from the seeker
+  totalPrice              Float
+  status                  BookingStatus @default(PENDING_CONFIRMATION)
+  rejectionReason         String? // If rejected by provider
+  cancellationReason      String? // If cancelled
+  createdAt               DateTime      @default(now())
+  updatedAt               DateTime      @updatedAt
+
+  seeker                  User          @relation("SeekerBookings", fields: [seekerId], references: [id])
+  seekerId                Int
+  provider                User          @relation("ProviderBookings", fields: [providerId], references: [id])
+  providerId              Int
+  service                 Service       @relation(fields: [serviceId], references: [id])
+  serviceId               Int
+  review                  Review?       // A booking can have one review
+  payment                 Payment?      // A booking can have one primary payment
+
+
+  @@map("bookings")
+}
+
+model Review {
+  id            Int          @id @default(autoincrement())
+  rating        Int // 1-5 stars
+  comment       String?
+  status        ReviewStatus @default(PENDING_APPROVAL)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  booking       Booking      @relation(fields: [bookingId], references: [id])
+  bookingId     Int          @unique // Each booking can only have one review
+  seeker        User         @relation("SeekerReviews", fields: [seekerId], references: [id])
+  seekerId      Int
+  provider      User         @relation("ProviderReviews", fields: [providerId], references: [id]) // Denormalized for easier querying of provider reviews
+  providerId    Int
+  service       Service      @relation("ServiceReviews", fields: [serviceId], references: [id]) // Denormalized for easier querying of service reviews
+  serviceId     Int
+
+  @@map("reviews")
+}
+
+model Payment {
+  id                    Int           @id @default(autoincrement())
+  amount                Float
+  currency              String        @default("PKR")
+  paymentGatewayTxnId   String?       @unique // Transaction ID from the external payment gateway
+  status                PaymentStatus @default(PENDING)
+  paymentMethod         String?       // e.g., 'Credit Card', 'JazzCash'
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  booking               Booking       @relation(fields: [bookingId], references: [id])
+  bookingId             Int           @unique // Each booking has one primary payment record
+  seeker                User          @relation("SeekerPayments", fields: [seekerId], references: [id])
+  seekerId              Int
+  provider              User          @relation("ProviderPayments", fields: [providerId], references: [id]) // Who receives the payment
+  providerId            Int
+
+
+  @@map("payments")
+}
